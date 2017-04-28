@@ -1,0 +1,9 @@
+[package]
+name = "rfind"
+version = "0.1.0"
+authors = ["Yusuf Koseoglu <yusufkoseoglu287@gmail.com>"]
+
+[dependencies]
+walkdir = "1"
+clap = "2.23.3"
+ansi_term = "0.9"

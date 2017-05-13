@@ -1,6 +1,7 @@
 extern crate walkdir;
 extern crate clap;
 extern crate ansi_term;
+extern crate threadpool;
 
 use clap::{Arg, App};
 use std::fs;
@@ -10,18 +11,22 @@ use std::io::BufReader;
 use std::io::BufRead;
 use std::error::Error;
 use std::collections::HashMap;
+use std::thread;
+use std::sync::mpsc;
+use threadpool::ThreadPool;
 
+type FoundItem = HashMap<usize, String>;
+type FoundItems<'a> = HashMap<String, FoundItem>;
 
-type FoundItem<'a> = HashMap<String, HashMap<usize, String>>;
-
-fn search_file(search_str: &str, file_extension: &str, styled_search_string: &str, entry: &DirEntry, found_items: &mut FoundItem) {
+fn search_file(search_str: String, file_extension: String, styled_search_string: String, entry: DirEntry) -> FoundItem {
+    let mut found_item = FoundItem::new();
     let path = entry.path();
     let meta = fs::metadata(path).unwrap();
     if !meta.is_dir() {
         let display = path.display();
-        if file_extension != "" {
-            if !entry.file_name().to_str().map(|s| s.ends_with(file_extension)).unwrap_or(false) {
-                return
+        if file_extension.as_str() != "" {
+            if !entry.file_name().to_str().map(|s| s.ends_with(file_extension.as_str())).unwrap_or(false) {
+                return found_item
             }
         }
         // Open the path in read-only mode, returns `io::Result<File>`
@@ -36,29 +41,46 @@ fn search_file(search_str: &str, file_extension: &str, styled_search_string: &st
         let br = BufReader::new(&file);
         for (i, line) in br.lines().enumerate() {
             let inline = line.unwrap_or(String::new());
-            if inline != "" && inline.contains(search_str) {
-                let item = found_items.entry(display.to_string()).or_insert(HashMap::new());
-                item.insert(i + 1, inline.replace(search_str, styled_search_string));
+            if inline != "" && inline.contains(search_str.as_str()) {
+                found_item.insert(i + 1, inline.replace(search_str.as_str(), styled_search_string.as_str()));
             }
         }
     }
+    found_item
 }
 
 fn search_recursive(search_str: &str, file_extension: &str) {
     let styled_search_string = Style::new().underline().paint(search_str.to_string()).to_string();
-
-    let mut found_items = FoundItem::new();
+    let (tx, rx) = mpsc::channel();
+    let pool = ThreadPool::new(4);
     for entry in WalkDir::new(".").into_iter().filter_map(|e| e.ok()) {
-        search_file(search_str, file_extension, &styled_search_string, &entry, &mut found_items);
+        let thread_tx = tx.clone();
+        let ssc = search_str.to_string().clone();
+        let f = file_extension.to_string().clone();
+        let sss = styled_search_string.clone();
+        let entry_clone = entry.clone();
+        pool.execute(move || {
+            let file_name = entry_clone.path().display().to_string();
+            let found_item = search_file(ssc, f, sss, entry_clone);
+            if found_item.len() > 0 {
+                let mut items = FoundItems::new();
+                items.insert(file_name, found_item);
+                thread_tx.send(items);
+//                    .unwrap_or_else(|x: mpsc::SendError<FoundItems>| {println!("{:?}", x)});
+            }
+        });
     }
-    for (file_name, items) in found_items.iter() {
-        println!("{}", file_name);
-        let mut vec: Vec<_> = items.iter().collect();
-        vec.sort_by(|a, b| a.0.cmp(b.0));
-        for (line_num, line) in vec {
-            println!("{}: {}", line_num, line);
+    drop(tx);
+    for ff in rx {
+        for (file_name, f_items) in ff.iter() {
+            println!("{}", file_name);
+            let mut vec: Vec<_> = f_items.iter().collect();
+            vec.sort_by(|a, b| a.0.cmp(b.0));
+            for (line_num, line) in vec {
+                println!("{}: {}", line_num, line);
+            }
+            println!();
         }
-        println!();
     }
 }
 // Open the path in read-only mode, returns `io::Result<File>`

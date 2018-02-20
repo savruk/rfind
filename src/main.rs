@@ -76,17 +76,16 @@ fn search_recursive(search_str: &str, file_extension: &str) {
     drop(tx);
     for ff in rx {
         for (file_name, f_items) in ff.iter() {
-            {
-                let mut lock = io::stdout().lock();
-                let mut buf = io::BufWriter::new(lock);
-                writeln!(buf, "{}", file_name);
-                let mut vec: Vec<_> = f_items.iter().collect();
-                vec.sort_by(|a, b| a.0.cmp(b.0));
-                for (line_num, line) in vec {
-                    writeln!(buf, "{}: {}", line_num, line);
-                }
-                writeln!(buf, "{}", "");
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let mut buf = io::BufWriter::new(handle);
+            writeln!(buf, "{}", file_name);
+            let mut vec: Vec<_> = f_items.iter().collect();
+            vec.sort_by(|a, b| a.0.cmp(b.0));
+            for (line_num, line) in vec {
+                writeln!(buf, "{}: {}", line_num, line);
             }
+            writeln!(buf, "{}", "");
         }
     }
 }

@@ -9,11 +9,14 @@ use ansi_term::Style;
 use walkdir::{WalkDir, DirEntry};
 use std::io::BufReader;
 use std::io::BufRead;
+use std::io::Write;
+
 use std::error::Error;
 use std::collections::HashMap;
 use std::thread;
 use std::sync::mpsc;
 use threadpool::ThreadPool;
+use std::io;
 
 type FoundItem = HashMap<usize, String>;
 type FoundItems<'a> = HashMap<String, FoundItem>;
@@ -66,20 +69,24 @@ fn search_recursive(search_str: &str, file_extension: &str) {
                 let mut items = FoundItems::new();
                 items.insert(file_name, found_item);
                 thread_tx.send(items);
-//                    .unwrap_or_else(|x: mpsc::SendError<FoundItems>| {println!("{:?}", x)});
+                //                    .unwrap_or_else(|x: mpsc::SendError<FoundItems>| {println!("{:?}", x)});
             }
         });
     }
     drop(tx);
     for ff in rx {
         for (file_name, f_items) in ff.iter() {
-            println!("{}", file_name);
-            let mut vec: Vec<_> = f_items.iter().collect();
-            vec.sort_by(|a, b| a.0.cmp(b.0));
-            for (line_num, line) in vec {
-                println!("{}: {}", line_num, line);
+            {
+                let mut lock = io::stdout().lock();
+                let mut buf = io::BufWriter::new(lock);
+                writeln!(buf, "{}", file_name);
+                let mut vec: Vec<_> = f_items.iter().collect();
+                vec.sort_by(|a, b| a.0.cmp(b.0));
+                for (line_num, line) in vec {
+                    writeln!(buf, "{}: {}", line_num, line);
+                }
+                writeln!(buf, "{}", "");
             }
-            println!();
         }
     }
 }

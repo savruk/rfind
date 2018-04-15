@@ -13,7 +13,6 @@ use std::io::Write;
 
 use std::error::Error;
 use std::collections::HashMap;
-use std::thread;
 use std::sync::mpsc;
 use threadpool::ThreadPool;
 use std::io;
@@ -89,6 +88,29 @@ fn search_recursive(search_str: &str, file_extension: &str) {
         }
     }
 }
+
+fn list_recursive(file_extension: &str) {
+    let stdout = io::stdout();
+    let handle = stdout.lock();
+    let mut buf = io::BufWriter::new(handle);
+
+    for entry in WalkDir::new(".").into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let meta = fs::metadata(path).unwrap();
+        if !meta.is_dir() {
+            let display = path.display();
+            if file_extension != "" {
+                if entry.file_name().to_str().map(|s| s.ends_with(file_extension)).unwrap_or(false) {
+                    buf.write_fmt(format_args!("{}\n", display.to_string()));
+                }
+            }else{
+                buf.write_fmt(format_args!("{}\n", display.to_string()));
+            }
+        }
+
+    }
+}
+
 // Open the path in read-only mode, returns `io::Result<File>`
 fn main() {
     let matches = App::new("RFIND")
@@ -97,16 +119,26 @@ fn main() {
         .about("Does awesome things")
         .arg(Arg::with_name("SEARCH PATTERN")
             .help("Sets the input file to use")
-            .required(true)
-            .index(1))
+            .short("s")
+            .long("search")
+            .takes_value(true))
         .arg(Arg::with_name("FILE EXTENSION")
             .help("Searches only in the matching files. e.g. 'py' 'html' "))
+        .arg(
+            Arg::with_name("LIST FILES")
+            .help("List all files")
+            .short("l")
+            .long("list")
+            .takes_value(false)
+        )
         .get_matches();
-    let search_string = matches.value_of("SEARCH PATTERN").unwrap();
-    let file_extension = match matches.value_of("FILE EXTENSION") {
-        Some(file_extension) => file_extension,
-        None => ""
-    };
-    search_recursive(search_string, file_extension)
+    let search_string = matches.value_of("SEARCH PATTERN").unwrap_or("");
+    let file_extension = matches.value_of("FILE EXTENSION").unwrap_or("");
+    let list_files = matches.occurrences_of("LIST FILES");
+    if list_files > 0 {
+        list_recursive(file_extension);
+    } else{
+        search_recursive(search_string, file_extension)
+    }
 }
 

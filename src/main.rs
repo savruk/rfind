@@ -119,9 +119,8 @@ fn main() {
         .about("Does awesome things")
         .arg(Arg::with_name("SEARCH PATTERN")
             .help("Sets the input file to use")
-            .short("s")
-            .long("search")
-            .takes_value(true))
+            .takes_value(true)
+        )
         .arg(Arg::with_name("FILE EXTENSION")
             .help("Searches only in the matching files. e.g. 'py' 'html' "))
         .arg(

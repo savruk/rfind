@@ -89,7 +89,7 @@ fn search_recursive(search_str: &str, file_extension: &str) {
     }
 }
 
-fn list_recursive(file_extension: &str) {
+fn list_recursive(search_str: &str, file_extension: &str) {
     let stdout = io::stdout();
     let handle = stdout.lock();
     let mut buf = io::BufWriter::new(handle);
@@ -99,11 +99,22 @@ fn list_recursive(file_extension: &str) {
         let meta = fs::metadata(path).unwrap();
         if !meta.is_dir() {
             let display = path.display();
-            if file_extension != "" {
-                if entry.file_name().to_str().map(|s| s.ends_with(file_extension)).unwrap_or(false) {
+            let fname = entry.file_name().to_str();
+            //println!("{}", fname.unwrap_or(""));
+            if file_extension != ""  && search_str != "" {
+                if fname.map(|s| s.ends_with(file_extension)).unwrap_or(false) && fname.unwrap_or("").contains(search_str) {
                     buf.write_fmt(format_args!("{}\n", display.to_string()));
                 }
-            }else{
+            } else if file_extension != "" {
+                if fname.map(|s| s.ends_with(file_extension)).unwrap_or(false)  {
+                    buf.write_fmt(format_args!("{}\n", display.to_string()));
+                }
+            } else if search_str != "" {
+                if fname.unwrap_or("").contains(search_str) {
+                    buf.write_fmt(format_args!("{}\n", display.to_string()));
+                }
+            }
+            else{
                 buf.write_fmt(format_args!("{}\n", display.to_string()));
             }
         }
@@ -135,7 +146,7 @@ fn main() {
     let file_extension = matches.value_of("FILE EXTENSION").unwrap_or("");
     let list_files = matches.occurrences_of("LIST FILES");
     if list_files > 0 {
-        list_recursive(file_extension);
+        list_recursive(search_string, file_extension)
     } else{
         search_recursive(search_string, file_extension)
     }

@@ -23,7 +23,13 @@ type FoundItems<'a> = HashMap<String, FoundItem>;
 fn search_file(search_str: String, file_extension: String, styled_search_string: String, entry: DirEntry) -> FoundItem {
     let mut found_item = FoundItem::new();
     let path = entry.path();
-    let meta = fs::metadata(path).unwrap();
+    let meta = match fs::metadata(path){
+        Err(why) => {
+            println!("{:?} {:?}", why.source(), path);
+            return found_item;
+        }
+        Ok(meta) => meta
+    };
     if !meta.is_dir() {
         let display = path.display();
         if file_extension.as_str() != "" {
@@ -96,7 +102,13 @@ fn list_recursive(search_str: &str, file_extension: &str) {
 
     for entry in WalkDir::new(".").into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        let meta = fs::metadata(path).unwrap();
+        let meta = match fs::metadata(path){
+            Err(why) => {
+                println!("{:?} {:?}", why, path);
+                continue;
+            }
+            Ok(meta) => meta
+        };
         if !meta.is_dir() {
             let display = path.display();
             let fname = entry.file_name().to_str();

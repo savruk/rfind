@@ -20,12 +20,22 @@ use std::io;
 type FoundItem = HashMap<usize, String>;
 type FoundItems<'a> = HashMap<String, FoundItem>;
 
+
+fn print_error(err: &std::io::Error, path: &std::path::Path) {
+    if let Some(inner_err) = err.get_ref() {
+        println!("ERROR: {:?}: {:?}", inner_err, path);
+    } else {
+        println!("ERROR: {:?}: {:?}", err.kind(), path);
+    }
+}
+
+
 fn search_file(search_str: String, file_extension: String, styled_search_string: String, entry: DirEntry) -> FoundItem {
     let mut found_item = FoundItem::new();
     let path = entry.path();
     let meta = match fs::metadata(path){
         Err(why) => {
-            println!("{:?} {:?}", why.source(), path);
+            print_error(&why, path);
             return found_item;
         }
         Ok(meta) => meta
@@ -104,7 +114,7 @@ fn list_recursive(search_str: &str, file_extension: &str) {
         let path = entry.path();
         let meta = match fs::metadata(path){
             Err(why) => {
-                println!("{:?} {:?}", why, path);
+                print_error(&why, path);
                 continue;
             }
             Ok(meta) => meta

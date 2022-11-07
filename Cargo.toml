@@ -2,9 +2,18 @@
 name = "rfind"
 version = "0.1.0"
 authors = ["Yusuf Koseoglu <yusufkoseoglu287@gmail.com>"]
+edition = "2021"
 
 [dependencies]
 walkdir = "1"
 clap = "2.23.3"
 ansi_term = "0.9"
 threadpool = "1.3.2"
+futures = "0.3.21"
+log = "0.4.16"
+env_logger = "0.9.0"
+
+
+[dependencies.async-std]
+version = "1.11.0"
+features = ["unstable"]

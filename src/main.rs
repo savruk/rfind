@@ -1,25 +1,128 @@
-extern crate walkdir;
-extern crate clap;
 extern crate ansi_term;
+extern crate clap;
+extern crate log;
 extern crate threadpool;
+extern crate walkdir;
 
-use clap::{Arg, App};
-use std::fs;
 use ansi_term::Style;
-use walkdir::{WalkDir, DirEntry};
-use std::io::BufReader;
-use std::io::BufRead;
-use std::io::Write;
-
-use std::error::Error;
+use async_std::{fs, io, io::prelude::*, println, task};
+use clap::{App, Arg};
+use env_logger;
+use futures::stream::{self, StreamExt, TryStreamExt};
+use log::{debug, info};
 use std::collections::HashMap;
-use std::sync::mpsc;
-use threadpool::ThreadPool;
-use std::io;
+use walkdir::WalkDir;
 
 type FoundItem = HashMap<usize, String>;
 type FoundItems<'a> = HashMap<String, FoundItem>;
 
+#[derive(Debug)]
+enum Action {
+    Search,
+}
+struct Rfind {
+    search_string: String,
+    file_extension: String,
+    action: Action,
+}
+
+impl Rfind {
+    pub fn new(search_string: String, file_extension: String, action: Action) -> Self {
+        Self {
+            search_string,
+            file_extension,
+            action,
+        }
+    }
+
+    pub async fn run(&self) -> Result<(), io::Error>{
+        debug!("run with {:?}", self.action);
+
+        let res = match self.action {
+            // Action::List => self.list_recursive(),
+            Action::Search => self.search_recursive(),
+        };
+        res.await
+    }
+
+    async fn search_file(
+        &self,
+        search_str: &str,
+        file_extension: &str,
+        styled_search_string: &str,
+        entry: walkdir::DirEntry,
+    ) -> FoundItem {
+        let mut found_item = FoundItem::new();
+        let path = entry.path();
+        let meta = match fs::metadata(path).await {
+            Err(why) => {
+                print_error(&why, path);
+                return found_item;
+            }
+            Ok(meta) => meta,
+        };
+        if !meta.is_dir() {
+            let display = path.display();
+            if file_extension != "" {
+                if !entry
+                    .file_name()
+                    .to_str()
+                    .map(|s| s.ends_with(file_extension))
+                    .unwrap_or(false)
+                {
+                    return found_item;
+                }
+            }
+            // Open the path in read-only mode, returns `io::Result<File>`
+            let file = match fs::File::open(path).await {
+                // The `description` method of `io::Error` returns a string that
+                // describes the error
+                Err(why) => panic!("couldn't open {}: {}", display, why),
+                Ok(file) => file,
+            };
+
+            let br = io::BufReader::new(file);
+            let mut lines = br.lines();
+            let mut i = 1;
+            while let Some(line) = lines.next().await {
+                let inline = line.unwrap_or(String::new());
+                if inline != "" && inline.contains(search_str) {
+                    found_item.insert(i, inline.replace(search_str, styled_search_string));
+                }
+                i += 1;
+            }
+        } else {
+            println!("not dir: {:?}", path);
+        }
+        // debug!("found something: {:?}: {:?}", found_item, path);
+
+        found_item
+    }
+    async fn search_recursive(&self) -> Result<(), io::Error> {
+        let styled_search_string = Style::new()
+            .underline()
+            .paint(self.search_string.as_str())
+            .to_string();
+        let path_stream = stream::iter(WalkDir::new(".").into_iter());
+        const MAX_CONCURRENT_JUMPERS: usize = 100;
+
+        let fut = path_stream.try_for_each_concurrent(MAX_CONCURRENT_JUMPERS, |entry| async {
+            // debug!("checking {:?}", entry);
+            let item = self.search_file(
+                self.search_string.as_str(),
+                self.file_extension.as_str(),
+                styled_search_string.as_str(),
+                entry,
+            )
+            .await;
+            debug!("found something {:?} {:?}", item[0], item[1]);
+
+            Ok(())
+        }).await;
+        debug!("try_for_each_concurrent finished {:?}", fut);
+        Ok(())
+    }
+}
 
 fn print_error(err: &std::io::Error, path: &std::path::Path) {
     if let Some(inner_err) = err.get_ref() {
@@ -29,148 +132,32 @@ fn print_error(err: &std::io::Error, path: &std::path::Path) {
     }
 }
 
-
-fn search_file(search_str: String, file_extension: String, styled_search_string: String, entry: DirEntry) -> FoundItem {
-    let mut found_item = FoundItem::new();
-    let path = entry.path();
-    let meta = match fs::metadata(path){
-        Err(why) => {
-            print_error(&why, path);
-            return found_item;
-        }
-        Ok(meta) => meta
-    };
-    if !meta.is_dir() {
-        let display = path.display();
-        if file_extension.as_str() != "" {
-            if !entry.file_name().to_str().map(|s| s.ends_with(file_extension.as_str())).unwrap_or(false) {
-                return found_item
-            }
-        }
-        // Open the path in read-only mode, returns `io::Result<File>`
-        let file = match fs::File::open(&path) {
-            // The `description` method of `io::Error` returns a string that
-            // describes the error
-            Err(why) => panic!("couldn't open {}: {}", display,
-                               why.description()),
-            Ok(file) => file,
-        };
-
-        let br = BufReader::new(&file);
-        for (i, line) in br.lines().enumerate() {
-            let inline = line.unwrap_or(String::new());
-            if inline != "" && inline.contains(search_str.as_str()) {
-                found_item.insert(i + 1, inline.replace(search_str.as_str(), styled_search_string.as_str()));
-            }
-        }
-    }
-    found_item
-}
-
-fn search_recursive(search_str: &str, file_extension: &str) {
-    let styled_search_string = Style::new().underline().paint(search_str.to_string()).to_string();
-    let (tx, rx) = mpsc::channel();
-    let pool = ThreadPool::new(4);
-    for entry in WalkDir::new(".").into_iter().filter_map(|e| e.ok()) {
-        let thread_tx = tx.clone();
-        let ssc = search_str.to_string().clone();
-        let f = file_extension.to_string().clone();
-        let sss = styled_search_string.clone();
-        let entry_clone = entry.clone();
-        pool.execute(move || {
-            let file_name = entry_clone.path().display().to_string();
-            let found_item = search_file(ssc, f, sss, entry_clone);
-            if found_item.len() > 0 {
-                let mut items = FoundItems::new();
-                items.insert(file_name, found_item);
-                thread_tx.send(items);
-                //                    .unwrap_or_else(|x: mpsc::SendError<FoundItems>| {println!("{:?}", x)});
-            }
-        });
-    }
-    drop(tx);
-    for ff in rx {
-        for (file_name, f_items) in ff.iter() {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            let mut buf = io::BufWriter::new(handle);
-            buf.write_fmt(format_args!("{}\n", file_name));
-            let mut vec: Vec<_> = f_items.iter().collect();
-            vec.sort_by(|a, b| a.0.cmp(b.0));
-            for (line_num, line) in vec {
-                buf.write_fmt(format_args!("{}: {}\n", line_num, line));
-            }
-            buf.write_fmt(format_args!("{}\n", ""));
-        }
-    }
-}
-
-fn list_recursive(search_str: &str, file_extension: &str) {
-    let stdout = io::stdout();
-    let handle = stdout.lock();
-    let mut buf = io::BufWriter::new(handle);
-
-    for entry in WalkDir::new(".").into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let meta = match fs::metadata(path){
-            Err(why) => {
-                print_error(&why, path);
-                continue;
-            }
-            Ok(meta) => meta
-        };
-        if !meta.is_dir() {
-            let display = path.display();
-            let fname = entry.file_name().to_str();
-            //println!("{}", fname.unwrap_or(""));
-            if file_extension != ""  && search_str != "" {
-                if fname.map(|s| s.ends_with(file_extension)).unwrap_or(false) && fname.unwrap_or("").contains(search_str) {
-                    buf.write_fmt(format_args!("{}\n", display.to_string()));
-                }
-            } else if file_extension != "" {
-                if fname.map(|s| s.ends_with(file_extension)).unwrap_or(false)  {
-                    buf.write_fmt(format_args!("{}\n", display.to_string()));
-                }
-            } else if search_str != "" {
-                if fname.unwrap_or("").contains(search_str) {
-                    buf.write_fmt(format_args!("{}\n", display.to_string()));
-                }
-            }
-            else{
-                buf.write_fmt(format_args!("{}\n", display.to_string()));
-            }
-        }
-
-    }
-}
-
 // Open the path in read-only mode, returns `io::Result<File>`
 fn main() {
+    env_logger::init();
     let matches = App::new("RFIND")
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
         .about("Does awesome things")
-        .arg(Arg::with_name("SEARCH PATTERN")
-            .help("Sets the input file to use")
-            .takes_value(true)
+        .arg(
+            Arg::with_name("SEARCH PATTERN")
+                .help("Sets the input file to use")
+                .takes_value(true),
         )
-        .arg(Arg::with_name("FILE EXTENSION")
-            .help("Searches only in the matching files. e.g. 'py' 'html' "))
+        .arg(
+            Arg::with_name("FILE EXTENSION")
+                .help("Searches only in the matching files. e.g. 'py' 'html' "),
+        )
         .arg(
             Arg::with_name("LIST FILES")
-            .help("List all files")
-            .short("l")
-            .long("list")
-            .takes_value(false)
+                .help("List all files")
+                .short("l")
+                .long("list")
+                .takes_value(false),
         )
         .get_matches();
-    let search_string = matches.value_of("SEARCH PATTERN").unwrap_or("");
-    let file_extension = matches.value_of("FILE EXTENSION").unwrap_or("");
-    let list_files = matches.occurrences_of("LIST FILES");
-    if list_files > 0 {
-        list_recursive(search_string, file_extension)
-    } else{
-        search_recursive(search_string, file_extension)
-    }
+    let search_string = matches.value_of("SEARCH PATTERN").unwrap_or("").to_string();
+    let file_extension = matches.value_of("FILE EXTENSION").unwrap_or("").to_string();
+    let _list_files = matches.occurrences_of("LIST FILES");
+    task::block_on(Rfind::new(search_string, file_extension, Action::Search).run());
 }
-
